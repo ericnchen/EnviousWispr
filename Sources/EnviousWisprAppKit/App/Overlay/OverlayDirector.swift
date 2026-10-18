@@ -49,6 +49,15 @@ final class OverlayDirector {
   /// mid-dictation.
   private let selections: @MainActor () -> PillDesignSelections
 
+  /// Read once at fresh recording admission; a same-ID morph keeps that choice.
+  private let hideRecordingPill: @MainActor () -> Bool
+  private var hiddenRecordingID: PresentationID?
+
+  private func isHiddenRecording(_ presentation: PillDefinition?) -> Bool {
+    guard let presentation, Self.isRecording(presentation) else { return false }
+    return hiddenRecordingID == presentation.id
+  }
+
   /// How a bounded bridge reconciliation reaches the next run-loop turn.
   private let scheduleReconciliation: (@escaping () -> Void) -> Void
 
@@ -360,6 +369,9 @@ final class OverlayDirector {
     // end up editing the default instead of the seam — a seam that looks
     // installed and is not.
     selections: @escaping @MainActor () -> PillDesignSelections,
+    hideRecordingPill: @escaping @MainActor () -> Bool = {
+      UserDefaults.standard.bool(forKey: RecordingPillVisibilityPreference.key)
+    },
     makeID: @escaping () -> PresentationID = { PresentationID() },
     firstRenderSchedule: @escaping OverlayFirstRenderGate.Schedule = { work in
       DispatchQueue.main.async(execute: work)
@@ -373,6 +385,7 @@ final class OverlayDirector {
   ) {
     self.firstRenderSchedule = firstRenderSchedule
     self.selections = selections
+    self.hideRecordingPill = hideRecordingPill
     self.scheduleReconciliation = scheduleReconciliation
     self.host = host
     self.announce = announce
@@ -559,6 +572,7 @@ final class OverlayDirector {
       let capabilityHasWords = livePreview.isEnabledForGeometry()
       let resolution = selections().resolve(capabilityHasWords: capabilityHasWords)
       let at = position()
+      let hideWhileRecording = hideRecordingPill()
 
       let entry = PillCatalog.entry(
         for: .recording(audioLevel: token.audioLevel, design: resolution.design), id: token.id)
@@ -588,6 +602,8 @@ final class OverlayDirector {
         reconcileRecordingBridge()
         return
       }
+
+      hiddenRecordingID = hideWhileRecording ? definition.id : nil
 
       // **From the ACCEPTED definition's design, never from `resolution`.**
       // They are equal today, but passing `resolution.design` would reintroduce a
@@ -901,6 +917,7 @@ final class OverlayDirector {
       if case .recording? = plan.presentation?.content {
         // Still the recording pill. Its providers are still its own.
       } else {
+        hiddenRecordingID = nil
         model.clearRecordingProviders()
       }
 
@@ -1087,6 +1104,20 @@ final class OverlayDirector {
       expiryUpdate.resolvedStart?()
       if let announcement { announce(announcement) }
       detached.forEach { $0.resolve(false) }
+      return .completed
+    }
+    if isHiddenRecording(presentation) {
+      // Keep reducer state, providers and the bridge alive, without constructing
+      // a recording view or leaving an outgoing card's interactive window up.
+      // Detach pending work before callbacks: a result may reenter the director.
+      let detached = pendingFirstAcceptance?.relays ?? []
+      pendingFirstAcceptance = nil
+      presentedID = nil
+      host.hide()
+      // Suppression is not host refusal: do not roll back the recording. Nor is
+      // it visibility: do not announce it, start a dwell, or report it as shown.
+      detached.forEach { $0.resolve(false) }
+      relay?.resolve(false)
       return .completed
     }
     // **THE FIRST PRESENTATION IS DEFERRED ONE RUN LOOP, AND THIS IS A CRASH
@@ -1475,10 +1506,10 @@ extension OverlayDirector: OverlayPresenting {
       return receipt
     }
 
-    // Nothing rendered and nothing deferred: the plan changed nothing, which
-    // means the pill this receipt names is already on screen. That IS presented.
+    // Nothing rendered and nothing deferred: an unchanged occupant is already
+    // on screen unless this recording's visibility snapshot suppresses it.
     relay.disarm()
-    onResult(.presented(receipt))
+    onResult(isHiddenRecording(reducer.state.current) ? .notPresented : .presented(receipt))
     return receipt
   }
 
@@ -1748,10 +1779,13 @@ extension OverlayDirector: OverlayPresenting {
 
   /// Show an in-panel notice on the live recording pill, returning whether one was there to show
   /// it on (#3544 P4). A caller that tells the user something once uses this answer to know the
-  /// notice was actually shown; `update(.inPanelNotice)` is a silent no-op without a recording.
+  /// notice was actually shown. Hidden recordings return false and leave the notice unspent;
+  /// `update(.inPanelNotice)` is a silent no-op without a visible recording.
   @discardableResult
   func showInPanelNotice(_ reason: RecordingNoticeReason, dismissAfter: Double?) -> Bool {
-    guard let current = reducer.state.current, case .recording = current.content else {
+    guard let current = reducer.state.current, case .recording = current.content,
+      !isHiddenRecording(current)
+    else {
       return false
     }
     update(.inPanelNotice(reason, dismissAfter: dismissAfter))
@@ -1763,6 +1797,9 @@ extension OverlayDirector: OverlayPresenting {
     case .recordingLock(let isLocked):
       handle(.lockStateChanged(isLocked), binding: .none)
     case .inPanelNotice(let reason, let dismissAfter):
+      // These notices live inside the recording window. A hidden recording
+      // cannot show one or spend the caller's once-per-session allowance.
+      guard !isHiddenRecording(reducer.state.current) else { return }
       handle(.inPanelNotice(reason, dismissAfter: dismissAfter), binding: .none)
     case .parakeetUpgradeProgress(let fraction):
       handle(.parakeetUpgradeProgress(fraction: fraction), binding: .none)

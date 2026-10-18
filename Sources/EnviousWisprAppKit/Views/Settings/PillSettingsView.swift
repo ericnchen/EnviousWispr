@@ -9,6 +9,7 @@ import SwiftUI
 /// row (title, short line, "?") inside one section; the bindings did not move.
 struct PillSettingsView: View {
   @Environment(SettingsManager.self) private var settings
+  @AppStorage(RecordingPillVisibilityPreference.key) private var hideWhileRecording = false
 
   var body: some View {
     @Bindable var settings = settings
@@ -40,6 +41,19 @@ struct PillSettingsView: View {
             // The mockup's control: two equal halves, no arrows, a fixed width so
             // the halves match (founder, 2026-10-03).
             .frame(width: 240)
+          }
+        }
+
+        BrandedRow {
+          VStack(alignment: .leading, spacing: 6) {
+            Toggle("Hide while recording", isOn: $hideWhileRecording)
+              .toggleStyle(BrandedToggleStyle())
+            Text(
+              "Applies to the next recording. Hides the recording indicator, live words, and in-pill recording notices. Use your keyboard shortcuts to stop or cancel. Processing and error notices still appear."
+            )
+            .font(.stHelper)
+            .foregroundStyle(.stTextSecondary)
+            .fixedSize(horizontal: false, vertical: true)
           }
         }
 
