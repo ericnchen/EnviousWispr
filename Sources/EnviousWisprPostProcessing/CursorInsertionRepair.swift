@@ -233,7 +233,7 @@ public enum CursorInsertionRepair {
   /// rather than re-deriving it — which is how a second trailing-space authority
   /// would get created.
   public struct PreparedPayloads: Equatable, Sendable {
-    /// Today's behaviour, including its trailing space. Never `nil`.
+    /// The fallback payload, with trailing whitespace removed. Never `nil`.
     public let legacyText: String
     /// The contextual candidate, or `nil` when no SAFE candidate can be
     /// produced — either the caret context was unreadable, or the caret sits
@@ -244,8 +244,11 @@ public enum CursorInsertionRepair {
     public let candidateRules: [AppliedRule]
 
     public init(legacyText: String, repairedText: String?, candidateRules: [AppliedRule]) {
-      self.legacyText = legacyText
-      self.repairedText = repairedText
+      // Personal fork: strip trailing whitespace on both delivery paths.
+      self.legacyText = String(legacyText.reversed().drop(while: \.isWhitespace).reversed())
+      self.repairedText = repairedText.map {
+        String($0.reversed().drop(while: \.isWhitespace).reversed())
+      }
       self.candidateRules = candidateRules
     }
   }
