@@ -272,7 +272,8 @@ enum PillDismissal: Equatable, Sendable {
 /// The receipt still means what it always meant: the request was ADMITTED and
 /// the caller OWNS that presentation. A caller that also needs to know the pill
 /// was SEEN — because it is about to spend a once-per-launch allowance, or
-/// record that the user was shown something — takes this instead.
+/// record that the user was shown something — takes this instead. A recording
+/// hidden by preference still owns its receipt but reports `.notPresented`.
 enum PillPresentationResult: Equatable, Sendable {
   case presented(PillReceipt)
   case notPresented
